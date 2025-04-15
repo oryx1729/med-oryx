@@ -1,0 +1,18 @@
+[project]
+name = "med-oryx"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic-haystack>=2.4.1",
+    "biomcp-python>=0.1.1",
+    "haystack-ai>=2.13.0rc0",
+    "jupyter>=1.1.1",
+    "mcp-haystack",
+    "ollama-haystack>=2.4.1",
+    "streamlit>=1.44.1",
+]
+
+[tool.uv.sources]
+mcp-haystack = { git = "https://github.com/deepset-ai/haystack-core-integrations.git", subdirectory = "integrations/mcp", rev = "mcp_toolset" }
