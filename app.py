@@ -163,6 +163,40 @@ if prompt := st.chat_input("What would you like to know?"):
         try:
             logger.info(f"Running agent with query: {prompt}")
             
+            # --- Streaming Setup --- 
+            response_placeholder = st.empty() # Placeholder for streaming output
+            
+            # Define the streaming callback handler
+            class ResponseAccumulator:
+                def __init__(self):
+                    self.text = ""
+                
+                def add_chunk(self, chunk):
+                    # Assuming chunk has a .content attribute like before
+                    # Adapt this based on the actual chunk structure if needed
+                    if hasattr(chunk, 'content'): 
+                        self.text += chunk.content
+                        response_placeholder.markdown(self.text + "▌")
+                    elif isinstance(chunk, str): # Fallback if chunk is just a string
+                        self.text += chunk
+                        response_placeholder.markdown(self.text + "▌")
+                    # Log chunk structure if needed for debugging
+                    # logger.info(f"Stream chunk: {chunk}") 
+
+            accumulator = ResponseAccumulator()
+            
+            # Get the agent component and set its generator's streaming callback
+            try:
+                agent_component = pipeline.get_component("agent")
+                # Assuming the generator is accessible like this, adjust if needed
+                if hasattr(agent_component, 'chat_generator') and agent_component.chat_generator:
+                    agent_component.chat_generator.streaming_callback = accumulator.add_chunk
+                else:
+                    logger.warning("Could not find chat_generator on agent component to set streaming callback.")
+            except Exception as e:
+                 logger.error(f"Error setting streaming callback: {e}")
+            # --- End Streaming Setup ---
+            
             # Prepare the initial message for the agent pipeline
             user_input_msg = ChatMessage.from_user(prompt)
             
@@ -175,17 +209,18 @@ if prompt := st.chat_input("What would you like to know?"):
             agent_output = result.get("agent", {})
             full_transcript_messages = agent_output.get("messages", [])
             
-            final_answer = "Sorry, I couldn't get a final answer." # Default
+            # Final answer might be fully captured by accumulator, or get from last message
+            final_answer = accumulator.text if accumulator.text else "Sorry, I couldn't get a final answer." 
+            # Optionally, double-check with the last message if accumulator is empty
+            if not final_answer and full_transcript_messages:
+                 for msg in reversed(full_transcript_messages):
+                     if isinstance(msg, ChatMessage) and msg.role == "assistant":
+                         final_answer = msg.text
+                         break
+
             current_tool_invocations = []
             
             if full_transcript_messages:
-                # Find the last assistant message for the final answer
-                for msg in reversed(full_transcript_messages):
-                     if isinstance(msg, ChatMessage) and msg.role == "assistant":
-                         # Use .text for the final answer
-                         final_answer = msg.text
-                         break
-                
                 # Parse the transcript for tool calls and results
                 for msg in full_transcript_messages:
                     # Tool messages contain ToolCallResult(s) in tool_call_results list
@@ -203,8 +238,8 @@ if prompt := st.chat_input("What would you like to know?"):
                         
             # --- End Extraction Logic --- 
 
-            # Display final answer
-            st.markdown(final_answer)
+            # Display final answer (update placeholder without cursor)
+            response_placeholder.markdown(final_answer)
             
             # Add assistant response and tools to history
             st.session_state.messages.append({"role": "assistant", "content": final_answer})
@@ -212,7 +247,7 @@ if prompt := st.chat_input("What would you like to know?"):
             
             # Display current tool invocations if any (immediately below the answer)
             if current_tool_invocations:
-                with st.expander("🔧 View Tool Invocations (Current)", expanded=False): # Collapsed by default now
+                with st.expander("🔧 View Tool Invocations", expanded=False): # Collapsed by default now
                     for tool_invocation in current_tool_invocations:
                         tool_name = tool_invocation.get("name", "Unknown Tool")
                         tool_args = tool_invocation.get("args", {})
