@@ -10,6 +10,8 @@ import os
 import nest_asyncio
 import traceback
 import logging
+import ipdb
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -30,6 +32,10 @@ st.set_page_config(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Initialize session state for tool invocations
+if "tool_invocations" not in st.session_state:
+    st.session_state.tool_invocations = []
+
 # Initialize session state for API key
 if "anthropic_api_key" not in st.session_state:
     st.session_state.anthropic_api_key = None
@@ -44,25 +50,15 @@ def initialize_pipeline(api_key):
     server_info = StdioServerInfo(command="uv", args=["run", "--with", "biomcp-python", "biomcp", "run"])
     mcp_toolset = MCPToolset(server_info)
     
+    # Initialize the Agent
+    agent = Agent(
+        chat_generator=AnthropicChatGenerator(model="claude-3-7-sonnet-20250219"),
+        tools=mcp_toolset
+    )
+    
     # Create the pipeline
     pipeline = Pipeline()
-    pipeline.add_component("llm", AnthropicChatGenerator(model="claude-3-7-sonnet-20250219", tools=mcp_toolset))
-    pipeline.add_component("tool_invoker", ToolInvoker(tools=mcp_toolset))
-    pipeline.add_component(
-        "adapter",
-        OutputAdapter(
-            template="{{ initial_msg + initial_tool_messages + tool_messages }}",
-            output_type=list[ChatMessage],
-            unsafe=True,
-        ),
-    )
-    pipeline.add_component("response_llm", AnthropicChatGenerator(model="claude-3-7-sonnet-20250219"))
-    
-    # Connect the components
-    pipeline.connect("llm.replies", "tool_invoker.messages")
-    pipeline.connect("llm.replies", "adapter.initial_tool_messages")
-    pipeline.connect("tool_invoker.tool_messages", "adapter.tool_messages")
-    pipeline.connect("adapter.output", "response_llm.messages")
+    pipeline.add_component("agent", agent)
     
     return pipeline, mcp_toolset
 
@@ -109,9 +105,43 @@ This assistant can help you with:
 """)
 
 # Display chat messages
-for message in st.session_state.messages:
+for idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        
+        # Display tool invocations for this assistant message if they exist
+        invocations = st.session_state.tool_invocations[idx] if idx < len(st.session_state.tool_invocations) else None
+        if message["role"] == "assistant" and invocations:
+            with st.expander("🔧 View Tool Invocations", expanded=False):
+                for tool_invocation in invocations:
+                    tool_name = tool_invocation.get("name", "Unknown Tool")
+                    tool_args = tool_invocation.get("args", {})
+                    tool_result = tool_invocation.get("result", "No result")
+                    
+                    # Display using Streamlit columns
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        st.markdown(f"🔧 **{tool_name}**")
+                    with col2:
+                        st.markdown("**Input:**")
+                        st.json(tool_args)
+                        st.markdown("**Output:**")
+                        # Handle potential non-JSON results gracefully
+                        try:
+                            # Attempt to load string results as JSON first
+                            if isinstance(tool_result, str):
+                                try:
+                                    parsed_result = json.loads(tool_result)
+                                    st.json(parsed_result)
+                                except json.JSONDecodeError:
+                                    # If not a JSON string, display as preformatted text/markdown
+                                    st.markdown(f"```\n{tool_result}\n```") 
+                            else:
+                                 st.json(tool_result) # If already object/dict, display as JSON
+                        except Exception as json_ex:
+                            logger.error(f"Error displaying tool result: {json_ex}")
+                            st.text(str(tool_result)) # Fallback to text
+                    st.markdown("---")
 
 # Chat input
 if prompt := st.chat_input("What would you like to know?"):
@@ -122,6 +152,7 @@ if prompt := st.chat_input("What would you like to know?"):
     
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.tool_invocations.append(None) # Add placeholder for user message tools
     
     # Display user message
     with st.chat_message("user"):
@@ -130,55 +161,92 @@ if prompt := st.chat_input("What would you like to know?"):
     # Display assistant response
     with st.chat_message("assistant"):
         try:
-            # Create a placeholder for streaming the response
-            response_placeholder = st.empty()
+            logger.info(f"Running agent with query: {prompt}")
             
-            # Create a class to hold the response
-            class ResponseAccumulator:
-                def __init__(self):
-                    self.text = ""
+            # Prepare the initial message for the agent pipeline
+            user_input_msg = ChatMessage.from_user(prompt)
+            
+            # Run the agent pipeline
+            result = pipeline.run({"agent": {"messages": [user_input_msg]}})
+            
+            # logger.info(f"Agent result: {result}")
+            
+            # --- Extract Data from Pipeline Result --- 
+            agent_output = result.get("agent", {})
+            full_transcript_messages = agent_output.get("messages", [])
+            
+            final_answer = "Sorry, I couldn't get a final answer." # Default
+            current_tool_invocations = []
+            
+            if full_transcript_messages:
+                # Find the last assistant message for the final answer
+                for msg in reversed(full_transcript_messages):
+                     if isinstance(msg, ChatMessage) and msg.role == "assistant":
+                         # Use .text for the final answer
+                         final_answer = msg.text
+                         break
                 
-                def add_chunk(self, chunk):
-                    self.text += chunk.content
-                    response_placeholder.markdown(self.text + "▌")
+                # Parse the transcript for tool calls and results
+                for msg in full_transcript_messages:
+                    # Tool messages contain ToolCallResult(s) in tool_call_results list
+                    if isinstance(msg, ChatMessage) and msg.role == "tool" and msg.tool_call_results:
+                        for tool_call_result in msg.tool_call_results:
+                            tool_origin = tool_call_result.origin # This is the original ToolCall
+                            if tool_origin:
+                                current_tool_invocations.append({
+                                    "name": tool_origin.tool_name,
+                                    "args": tool_origin.arguments,
+                                    "result": tool_call_result.result # The actual string/object result
+                                })
+                            else:
+                                logger.warning(f"ToolCallResult missing origin: {tool_call_result}")
+                        
+            # --- End Extraction Logic --- 
+
+            # Display final answer
+            st.markdown(final_answer)
             
-            # Create an instance of the accumulator
-            accumulator = ResponseAccumulator()
+            # Add assistant response and tools to history
+            st.session_state.messages.append({"role": "assistant", "content": final_answer})
+            st.session_state.tool_invocations.append(current_tool_invocations)
             
-            # Create a new response_llm component with the streaming callback
-            pipeline.remove_component("response_llm")
-            pipeline.add_component("response_llm", AnthropicChatGenerator(
-                model="claude-3-7-sonnet-20250219",
-                streaming_callback=accumulator.add_chunk
-            ))
-            
-            # Reconnect the components
-            pipeline.connect("adapter.output", "response_llm.messages")
-            
-            # Create messages for the pipeline
-            logger.info(f"Prompt: {prompt}")
-            messages = [ChatMessage.from_user(prompt)]
-            
-            # Log the pipeline inputs for debugging
-            logger.info(f"Running pipeline with inputs: messages={messages}")
-            
-            # Run the pipeline with all required inputs
-            result = pipeline.run({
-                "llm": {"messages": messages},
-                "adapter": {"initial_msg": messages}
-            })
-            
-            # Log the pipeline result for debugging
-            logger.info(f"Pipeline result: {result}")
-            
-            # Update the placeholder with the final response
-            response_placeholder.markdown(accumulator.text)
-            
-            # Add assistant response to chat history
-            st.session_state.messages.append({"role": "assistant", "content": accumulator.text})
+            # Display current tool invocations if any (immediately below the answer)
+            if current_tool_invocations:
+                with st.expander("🔧 View Tool Invocations (Current)", expanded=False): # Collapsed by default now
+                    for tool_invocation in current_tool_invocations:
+                        tool_name = tool_invocation.get("name", "Unknown Tool")
+                        tool_args = tool_invocation.get("args", {})
+                        tool_result = tool_invocation.get("result", "No result")
+                        
+                        # Display using Streamlit columns
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            st.markdown(f"🔧 **{tool_name}**")
+                        with col2:
+                            st.markdown("**Input:**")
+                            st.json(tool_args)
+                            st.markdown("**Output:**")
+                            # Handle potential non-JSON results gracefully
+                            try:
+                                # Attempt to load string results as JSON first
+                                if isinstance(tool_result, str):
+                                    try:
+                                        parsed_result = json.loads(tool_result)
+                                        st.json(parsed_result)
+                                    except json.JSONDecodeError:
+                                         # Display as markdown/code block if not JSON string
+                                        st.markdown(f"```\n{tool_result}\n```") 
+                                else:
+                                     st.json(tool_result) # If already object/dict, display as JSON
+                            except Exception as json_ex:
+                                logger.error(f"Error displaying tool result: {json_ex}")
+                                st.text(str(tool_result)) # Fallback to text
+                        st.markdown("---")
+
         except Exception as e:
             error_msg = f"Error processing your request: {str(e)}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
             st.error(error_msg)
-            st.session_state.messages.append({"role": "assistant", "content": error_msg}) 
+            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            st.session_state.tool_invocations.append([]) # Add empty tools for error message 
