@@ -130,6 +130,31 @@ if prompt := st.chat_input("What would you like to know?"):
     # Display assistant response
     with st.chat_message("assistant"):
         try:
+            # Create a placeholder for streaming the response
+            response_placeholder = st.empty()
+            
+            # Create a class to hold the response
+            class ResponseAccumulator:
+                def __init__(self):
+                    self.text = ""
+                
+                def add_chunk(self, chunk):
+                    self.text += chunk.content
+                    response_placeholder.markdown(self.text + "▌")
+            
+            # Create an instance of the accumulator
+            accumulator = ResponseAccumulator()
+            
+            # Create a new response_llm component with the streaming callback
+            pipeline.remove_component("response_llm")
+            pipeline.add_component("response_llm", AnthropicChatGenerator(
+                model="claude-3-7-sonnet-20250219",
+                streaming_callback=accumulator.add_chunk
+            ))
+            
+            # Reconnect the components
+            pipeline.connect("adapter.output", "response_llm.messages")
+            
             # Create messages for the pipeline
             logger.info(f"Prompt: {prompt}")
             messages = [ChatMessage.from_user(prompt)]
@@ -146,14 +171,11 @@ if prompt := st.chat_input("What would you like to know?"):
             # Log the pipeline result for debugging
             logger.info(f"Pipeline result: {result}")
             
-            # Get the response from the pipeline result
-            response = result["response_llm"]["replies"][0].text
-            
-            # Display the response
-            st.markdown(response)
+            # Update the placeholder with the final response
+            response_placeholder.markdown(accumulator.text)
             
             # Add assistant response to chat history
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.session_state.messages.append({"role": "assistant", "content": accumulator.text})
         except Exception as e:
             error_msg = f"Error processing your request: {str(e)}"
             logger.error(error_msg)
