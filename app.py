@@ -36,23 +36,25 @@ if "messages" not in st.session_state:
 if "tool_invocations" not in st.session_state:
     st.session_state.tool_invocations = []
 
-# Initialize session state for API key
-if "anthropic_api_key" not in st.session_state:
-    st.session_state.anthropic_api_key = None
-
 # Function to initialize the Haystack pipeline
 @st.cache_resource
-def initialize_pipeline(api_key):
-    # Set the API key
-    os.environ['ANTHROPIC_API_KEY'] = api_key
+def initialize_pipeline():
+    # Get the API key from environment variable
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY environment variable not set.")
+    
+    # No need to set os.environ['ANTHROPIC_API_KEY'] = api_key as Haystack/Anthropic client might pick it up automatically,
+    # or AnthropicChatGenerator needs it passed explicitly if not. Let's assume it picks it up for now.
     
     # Initialize MCP tools
     server_info = StdioServerInfo(command="uv", args=["run", "--with", "biomcp-python", "biomcp", "run"])
     mcp_toolset = MCPToolset(server_info)
     
     # Initialize the Agent
+    # The AnthropicChatGenerator will use the env var by default
     agent = Agent(
-        chat_generator=AnthropicChatGenerator(model="claude-3-7-sonnet-20250219"),
+        chat_generator=AnthropicChatGenerator(model="claude-3-5-sonnet-latest"), 
         tools=mcp_toolset
     )
     
@@ -62,23 +64,21 @@ def initialize_pipeline(api_key):
     
     return pipeline, mcp_toolset
 
-# Sidebar for API key input
+# Sidebar for API key input - REMOVED API KEY INPUT
 with st.sidebar:
-    st.title("Configuration")
-    st.markdown("---")
+    # st.title("Configuration") # Removed this line
+    # st.markdown("---") # Removed this line
     
-    # API key input
-    api_key = st.text_input("Anthropic API Key", type="password", value=st.session_state.anthropic_api_key or "")
-    if api_key:
-        st.session_state.anthropic_api_key = api_key
+    # Removed API key input section
     
-    st.markdown("---")
+    # st.markdown("---") # Removed this line
     st.title("Available Tools")
     
-    # Initialize pipeline if API key is provided
-    if st.session_state.anthropic_api_key:
+    # Initialize pipeline only if API key env var is set
+    if os.environ.get('ANTHROPIC_API_KEY'):
         try:
-            pipeline, mcp_toolset = initialize_pipeline(st.session_state.anthropic_api_key)
+            # Pass API key to initialize_pipeline
+            pipeline, mcp_toolset = initialize_pipeline()
             
             # Display tools in sidebar
             for tool in mcp_toolset.tools:
@@ -90,18 +90,25 @@ with st.sidebar:
             error_msg = f"Error initializing pipeline: {str(e)}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
-            st.error(error_msg)
+            # Display error in sidebar or main area? Sidebar for config error seems ok.
+            st.error(error_msg) 
     else:
-        st.info("Please enter your Anthropic API key to see available tools.")
+        st.info("ANTHROPIC_API_KEY environment variable not set. Please configure it to use the application.")
 
 # Main chat interface
-st.title("Medical Research Assistant")
-st.markdown("""
-This assistant can help you with:
-- Searching clinical trials
-- Finding variant information
-- Retrieving article details
-- And more!
+st.title("Med Oryx -- Medical Research Agent")
+
+# Improved app description based on BioMCP
+st.info("""
+**Med Oryx is your intelligent medical research companion powered by BioMCP and Haystack.**
+
+Leveraging authoritative biomedical data sources, Med Oryx can help you:
+- Search and analyze **clinical trials** from ClinicalTrials.gov (including protocols, outcomes, locations)
+- Find **genomic variant** information from MyVariant.info
+- Access **scientific literature** through PubMed/PubTator3
+- Answer complex biomedical questions using natural language
+
+Built with [BioMCP](https://github.com/genomoncology/biomcp) for biomedical data access and [Haystack](https://github.com/deepset-ai/haystack) for AI orchestration.
 """)
 
 # Display chat messages
@@ -145,9 +152,9 @@ for idx, message in enumerate(st.session_state.messages):
 
 # Chat input
 if prompt := st.chat_input("What would you like to know?"):
-    # Check if API key is provided
-    if not st.session_state.anthropic_api_key:
-        st.error("Please enter your Anthropic API key in the sidebar to use the chat.")
+    # Check if API key environment variable is set
+    if not os.environ.get('ANTHROPIC_API_KEY'):
+        st.error("ANTHROPIC_API_KEY environment variable not set. Please configure it to use the application.")
         st.stop()
     
     # Add user message to chat history
