@@ -98,6 +98,12 @@ Leveraging authoritative biomedical data sources, Med Oryx can help you:
 - Access **scientific literature** through PubMed/PubTator3
 - Answer complex biomedical questions using natural language
 
+The agent can answer questions like:
+- Are there any studies on new approaches to treating acne?
+- What are some ongoing trails for never-smokers with lung cancer?
+- Tell me about clinical trials for migraine prevention.
+- Are there trials for managing hay fever symptoms?
+
 Built with [BioMCP](https://github.com/genomoncology/biomcp) for biomedical data access and [Haystack](https://github.com/deepset-ai/haystack) for AI orchestration.
 """)
 
