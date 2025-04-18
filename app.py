@@ -10,7 +10,6 @@ import os
 import nest_asyncio
 import traceback
 import logging
-import ipdb
 import json
 
 # Configure logging
@@ -23,7 +22,7 @@ nest_asyncio.apply()
 
 # Set page config
 st.set_page_config(
-    page_title="Medical Research Assistant",
+    page_title="Medical Research Agent",
     page_icon="🏥",
     layout="wide"
 )
@@ -44,9 +43,6 @@ def initialize_pipeline():
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY environment variable not set.")
     
-    # No need to set os.environ['ANTHROPIC_API_KEY'] = api_key as Haystack/Anthropic client might pick it up automatically,
-    # or AnthropicChatGenerator needs it passed explicitly if not. Let's assume it picks it up for now.
-    
     # Initialize MCP tools
     server_info = StdioServerInfo(command="uv", args=["run", "--with", "biomcp-python", "biomcp", "run"])
     mcp_toolset = MCPToolset(server_info)
@@ -64,14 +60,8 @@ def initialize_pipeline():
     
     return pipeline, mcp_toolset
 
-# Sidebar for API key input - REMOVED API KEY INPUT
+
 with st.sidebar:
-    # st.title("Configuration") # Removed this line
-    # st.markdown("---") # Removed this line
-    
-    # Removed API key input section
-    
-    # st.markdown("---") # Removed this line
     st.title("Available Tools")
     
     # Initialize pipeline only if API key env var is set
@@ -98,7 +88,7 @@ with st.sidebar:
 # Main chat interface
 st.title("Med Oryx -- Medical Research Agent")
 
-# Improved app description based on BioMCP
+
 st.info("""
 **Med Oryx is your intelligent medical research companion powered by BioMCP and Haystack.**
 
@@ -226,7 +216,6 @@ if prompt := st.chat_input("What would you like to know?"):
                          break
 
             current_tool_invocations = []
-            
             if full_transcript_messages:
                 # Parse the transcript for tool calls and results
                 for msg in full_transcript_messages:
@@ -259,7 +248,7 @@ if prompt := st.chat_input("What would you like to know?"):
                         tool_name = tool_invocation.get("name", "Unknown Tool")
                         tool_args = tool_invocation.get("args", {})
                         tool_result = tool_invocation.get("result", "No result")
-                        
+                        # ipdb.set_trace()
                         # Display using Streamlit columns
                         col1, col2 = st.columns([1, 3])
                         with col1:
